@@ -19,7 +19,26 @@ from pathlib import Path
 def save_result(result: dict, results_dir: str = "../results") -> str:
     """Ghi result["cfg"], result["history"], result["summary"] (KHÔNG ghi best_state) ra
     <results_dir>/<exp_id>.json. Trả về đường dẫn file. Tạo thư mục nếu chưa có."""
-    raise NotImplementedError  # TODO
+    # Chỉ lấy cấu hình, lịch sử và tóm tắt; không lưu best_state chứa trọng số model.
+    # JSON là dạng file văn bản dùng để lưu các giá trị và danh sách có tên rõ ràng.
+    saved_result = {key: result[key] for key in ("cfg", "history", "summary")}
+    # Dùng mã thí nghiệm làm tên file, ví dụ exp_id = "base-s1" -> base-s1.json.
+    exp_id = result["cfg"]["exp_id"]
+    if not isinstance(exp_id, str) or not exp_id.strip() or any(
+        char in exp_id for char in '<>:"/\\|?*'
+    ):
+        raise ValueError("exp_id must be a non-empty string without filename special characters")
+
+    # Path giúp ghép đường dẫn; parents=True tạo cả thư mục cha nếu cần.
+    output_dir = Path(results_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{exp_id}.json"
+    # Chuyển sang văn bản trước khi mở file để lỗi chuyển đổi không xóa file cũ.
+    # ensure_ascii=False giữ nguyên tiếng Việt; indent=2 thụt dòng cho dễ đọc.
+    json_text = json.dumps(saved_result, ensure_ascii=False, indent=2)
+    # UTF-8 lưu được tiếng Việt; ghi đè kết quả nếu chạy lại cùng exp_id.
+    output_path.write_text(json_text + "\n", encoding="utf-8")
+    return str(output_path)  # Trả đường dẫn dạng chuỗi để notebook dùng tiếp.
 
 
 def load_results(results_dir: str = "../results") -> list[dict]:

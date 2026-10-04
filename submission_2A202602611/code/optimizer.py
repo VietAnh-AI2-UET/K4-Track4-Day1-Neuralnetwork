@@ -28,7 +28,19 @@ def build_optimizer(name: str, params, lr: float, weight_decay: float = 0.0,
          "adamw"        -> torch.optim.AdamW(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
     Chú ý: weight_decay của Adam (L2 trộn vào gradient) khác weight_decay của AdamW (suy giảm tách riêng).
     """
-    raise NotImplementedError  # TODO
+    if name not in OPTIMIZERS:  # Kiểm tra tên bộ tối ưu có nằm trong danh sách được hỗ trợ không.
+        raise ValueError(f"Unknown optimizer: {name!r}. Choose from {OPTIMIZERS}.")  # Báo lỗi và liệt kê các tên hợp lệ.
+
+    if name == "sgd":  # Chọn SGD: cập nhật tham số theo gradient (hướng thay đổi giúp giảm loss).
+        return torch.optim.SGD(params, lr=lr, weight_decay=weight_decay)  # lr là tốc độ học; weight_decay giúp hạn chế trọng số quá lớn.
+
+    if name == "sgd_momentum":  # Chọn SGD có momentum: giữ một phần hướng cập nhật từ các bước trước.
+        return torch.optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)  # Truyền hệ số momentum; mặc định là 0.9.
+
+    if name == "adam":  # Chọn Adam: tự điều chỉnh mức cập nhật cho từng tham số từ gradient hiện tại và trước đó.
+        return torch.optim.Adam(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)  # betas điều khiển mức ghi nhớ; eps tránh chia cho 0; weight_decay được cộng vào gradient.
+
+    return torch.optim.AdamW(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)  # Tên còn lại là adamw; giảm trọng số riêng, tách khỏi tính toán gradient của Adam.
 
 
 def build_scheduler(optimizer, name: str | None, total_steps: int, **kwargs):
@@ -49,4 +61,6 @@ def clip_gradients(params, max_norm: float | None) -> float:
     Giá trị trả về chính là `grad_norm` bạn phải ghi lại ở mỗi bước (để thấy "gai" gradient).
     Khi dùng mixed precision FP16 + GradScaler: phải scaler.unscale_(optimizer) TRƯỚC khi gọi hàm này.
     """
-    raise NotImplementedError  # TODO
+    limit = float("inf") if max_norm is None else max_norm  # Không đặt ngưỡng thì dùng vô cực để giữ nguyên gradient hữu hạn.
+    total_norm = torch.nn.utils.clip_grad_norm_(params, max_norm=limit, norm_type=2.0)  # Tính L2 chung (căn tổng bình phương mọi gradient), cắt nếu vượt ngưỡng và trả giá trị trước khi cắt.
+    return float(total_norm)  # Đổi tensor chứa chuẩn gradient thành số Python để ghi vào lịch sử huấn luyện.
