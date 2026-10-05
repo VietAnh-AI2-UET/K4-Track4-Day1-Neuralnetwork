@@ -1,0 +1,10 @@
+{
+  "baseline_exp_id": "base-s1-eval-replay",
+  "final_exp_id": "opt-adam-lr3e-3-s1",
+  "seed": 1,
+  "best_epoch": 20,
+  "selected_in_part3": "opt-adam-lr3e-3-s1",
+  "selection_changed": false,
+  "baseline_replayed": true,
+  "final_replayed": false
+}
