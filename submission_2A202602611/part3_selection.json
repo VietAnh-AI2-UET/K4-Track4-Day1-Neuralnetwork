@@ -1,0 +1,63 @@
+{
+  "cfg_final": {
+    "exp_id": "opt-adam-lr3e-3-s1",
+    "group": "optimizer",
+    "description": "Adam lr=0.003; khảo sát lr thứ hai cho Adam",
+    "loss": "ce",
+    "optimizer": "adam",
+    "lr": 0.003,
+    "weight_decay": 0.0,
+    "momentum": 0.9,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "eps": 1e-08,
+    "batch": 512,
+    "epochs": 20,
+    "hidden": [
+      256,
+      128
+    ],
+    "dropout": 0.0,
+    "init": "he",
+    "clip_norm": null,
+    "precision": "fp32",
+    "seed": 1,
+    "notes": "Đổi optimizer và lr so với baseline; so với opt-adam-lr1e-3-s1 chỉ đổi lr; momentum không áp dụng cho Adam; betas=(0.9,0.999); eps=1e-8; weight_decay=0",
+    "verbose": true
+  },
+  "best_epoch": 20,
+  "val_metrics": {
+    "step0_loss": 2.2690618094036408,
+    "best_val_loss": 0.20953205985396756,
+    "best_epoch": 20,
+    "final_train_loss": 0.179863494409432,
+    "final_val_loss": 0.20953205985396756,
+    "val_acc": 0.9162668617284482,
+    "val_macro_f1": 0.8782205973968894,
+    "time_per_epoch_s": 2.435596149979392,
+    "peak_mem_MB": 0.0,
+    "diverged": false,
+    "divergence_reason": "",
+    "total_update_steps": 14540,
+    "total_time_s": 48.71192299958784,
+    "device": "cpu",
+    "torch_version": "2.14.1+cpu",
+    "cpu_threads": 1
+  },
+  "selection_rule": "Highest val_macro_f1 at the minimum-val-loss epoch; tie: lower loss, lower lr",
+  "candidate_exp_ids": [
+    "base-s1",
+    "base-lr0.01-s1",
+    "base-lr0.03-s1",
+    "base-lr0.1-s1",
+    "opt-adam-lr1e-3-s1",
+    "opt-adam-lr3e-3-s1",
+    "hp-batch128-s1",
+    "hp-batch2048-s1"
+  ],
+  "baseline_noise_f1_2sigma": 0.025506766772041382,
+  "reason": "Chọn **opt-adam-lr3e-3-s1**, optimizer=adam, lr=0.003, batch=512, seed=1, epoch có val loss thấp nhất **20**. Val loss=0.209532, accuracy=91.63%, macro-F1=0.878221. Chênh lệch F1 so với baseline seed 1 là +0.021404; chưa vượt ngưỡng 2σ=0.025507. Đây là lựa chọn theo val trong các cấu hình đã thử; mức cải thiện chưa được xác nhận bằng nhiều seed. Part 4 phải dùng trọng số của epoch này, không điều chỉnh cấu hình theo điểm eval.",
+  "eval_used": false
+}

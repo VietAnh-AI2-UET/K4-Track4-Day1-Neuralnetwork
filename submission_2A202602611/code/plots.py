@@ -83,4 +83,21 @@ def plot_compare(results: list[dict], metric: str, path: str, title: str = "") -
 
     Dùng cho ảnh figures/compare_<nhóm>.png (ví dụ compare_optimizer.png).
     """
-    raise NotImplementedError  # TODO
+    if not results:
+        raise ValueError("Need at least one result to compare")
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    try:
+        for result in results:
+            h = result["history"]
+            if metric not in h or len(h[metric]) != len(h["epoch"]):
+                raise ValueError(f"Missing or inconsistent history metric: {metric}")
+            ax.plot(h["epoch"], h[metric], label=result["cfg"]["exp_id"])
+        ax.set(xlabel="Epoch", ylabel=metric, title=title or metric)
+        ax.grid(alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    finally:
+        plt.close(fig)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import random  # Thư viện tạo số ngẫu nhiên có sẵn của Python.
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -24,7 +25,7 @@ DEFAULT_CFG = dict(
     loss="ce",                 # "ce" | "mse"
     optimizer="sgd_momentum",  # "sgd" | "sgd_momentum" | "adam" | "adamw"
     lr=None,                   # TODO: chọn bằng val, không dùng eval
-    weight_decay=0.0, momentum=0.9,
+    weight_decay=0.0, momentum=0.9, betas=(0.9, 0.999), eps=1e-8,
     batch=512, epochs=20,
     hidden=(256, 128), dropout=0.0, init="he",
     clip_norm=None,            # None = không clip; hoặc số, ví dụ 1.0
@@ -241,6 +242,7 @@ def run_experiment(cfg: dict, data: dict) -> dict:
     optimizer = build_optimizer(
         cfg["optimizer"], model.parameters(), lr=cfg["lr"],
         weight_decay=cfg["weight_decay"], momentum=cfg["momentum"],
+        betas=tuple(cfg["betas"]), eps=cfg["eps"],
     )
     # Bộ xáo trộn riêng giúp thứ tự các lô lặp lại được với cùng seed.
     generator = torch.Generator(device=device).manual_seed(cfg["seed"])
@@ -256,13 +258,15 @@ def run_experiment(cfg: dict, data: dict) -> dict:
     step0_loss = initial_val["loss"]
     history = {key: [] for key in (
         "epoch", "train_loss", "val_loss", "val_acc", "val_macro_f1",
-        "grad_norm", "epoch_time_s",
+        "grad_norm", "epoch_time_s", "update_steps",
     )}
     # Giữ bản sao trên CPU để tránh chiếm thêm bộ nhớ GPU; clone tránh bị cập nhật theo model.
     best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
     best_epoch, best_val_loss = 0, float("inf")
     best_metrics = initial_val
     diverged = not np.isfinite(step0_loss)
+    divergence_reason = "Non-finite initial validation loss" if diverged else ""
+    total_update_steps = 0
 
     for epoch in range(1, cfg["epochs"] + 1):
         if diverged:
@@ -272,6 +276,7 @@ def run_experiment(cfg: dict, data: dict) -> dict:
         started = time.perf_counter()
         model.train()  # Bật lại dropout vì evaluate chuyển model sang chế độ đánh giá.
         grad_norms = []
+        epoch_update_steps = 0
         for xb, yb in iterate_batches(X_tr, y_tr, cfg["batch"], generator):
             optimizer.zero_grad(set_to_none=True)  # Xóa gradient của lô trước.
             # Chỉ tính đầu ra và loss bằng độ chính xác thấp; trọng số vẫn là FP32.
@@ -280,6 +285,7 @@ def run_experiment(cfg: dict, data: dict) -> dict:
                 loss = compute_loss(logits, yb, cfg["loss"])
             if not torch.isfinite(loss).item():
                 diverged = True  # Dừng trước khi loss lỗi làm hỏng trọng số.
+                divergence_reason = f"Non-finite training loss at epoch {epoch}"
                 break
             if scaler is not None:
                 scaler.scale(loss).backward()
@@ -290,19 +296,24 @@ def run_experiment(cfg: dict, data: dict) -> dict:
             grad_norms.append(gn)  # Hàm trả độ lớn gradient trước khi giới hạn.
             if scaler is not None:
                 # Khi FP16 bị tràn gradient, scaler bỏ qua cập nhật và giảm hệ số tăng loss.
+                scale_before = scaler.get_scale()
                 scaler.step(optimizer)
                 scaler.update()
+                epoch_update_steps += int(scaler.get_scale() >= scale_before)
             elif not np.isfinite(gn):
                 diverged = True
+                divergence_reason = f"Non-finite gradient norm at epoch {epoch}"
                 break
             else:
                 optimizer.step()  # Cập nhật trọng số để giảm loss.
+                epoch_update_steps += 1
 
         # Đo lại cả hai tập bằng FP32, tắt dropout để so sánh loss công bằng.
         train_metrics = evaluate(model, X_tr, y_tr, loss_name=cfg["loss"])
         val_metrics = evaluate(model, X_val, y_val, loss_name=cfg["loss"])
         if not np.isfinite(train_metrics["loss"]) or not np.isfinite(val_metrics["loss"]):
             diverged = True
+            divergence_reason = f"Non-finite evaluated loss at epoch {epoch}"
         if not diverged and val_metrics["loss"] < best_val_loss:
             best_val_loss, best_epoch = val_metrics["loss"], epoch
             best_metrics = val_metrics.copy()
@@ -315,9 +326,15 @@ def run_experiment(cfg: dict, data: dict) -> dict:
             "val_macro_f1": val_metrics["macro_f1"],
             "grad_norm": float(np.mean(grad_norms)) if grad_norms else float("nan"),
             "epoch_time_s": time.perf_counter() - started,
+            "update_steps": epoch_update_steps,
         }
         for key, value in epoch_values.items():
             history[key].append(value)
+        total_update_steps += epoch_update_steps
+        if cfg.get("verbose", False):
+            print(f"{cfg['exp_id']} | epoch {epoch:02d}/{cfg['epochs']} | "
+                  f"val_loss={val_metrics['loss']:.4f} | F1={val_metrics['macro_f1']:.4f} | "
+                  f"steps={epoch_update_steps} | {epoch_values['epoch_time_s']:.2f}s", flush=True)
 
     # Nếu chưa hoàn tất vòng nào hợp lệ, best_epoch = 0 ứng với trọng số ban đầu.
     if best_epoch == 0:
@@ -334,6 +351,11 @@ def run_experiment(cfg: dict, data: dict) -> dict:
         "time_per_epoch_s": float(np.mean(history["epoch_time_s"])) if history["epoch"] else 0.0,
         "peak_mem_MB": torch.cuda.max_memory_allocated(device) / (1024 ** 2) if device.type == "cuda" else 0.0,
         "diverged": bool(diverged),
+        "divergence_reason": divergence_reason,
+        "total_update_steps": total_update_steps,
+        "total_time_s": float(sum(history["epoch_time_s"])),
+        "device": str(device), "torch_version": torch.__version__,
+        "cpu_threads": torch.get_num_threads() if device.type == "cpu" else None,
     }
     return {"cfg": cfg, "history": history, "summary": summary, "best_state": best_state}
 
@@ -345,7 +367,30 @@ def write_predictions(row_id, preds, path: str) -> None:
     preds  : nhãn dự đoán int64 0..6 (cùng thứ tự với row_id)
     Phải đủ mọi dòng của tập eval, mỗi row_id đúng một lần.
     """
-    raise NotImplementedError  # TODO
+    import csv
+
+    def integer_vector(values, name):
+        if isinstance(values, torch.Tensor):
+            values = values.detach().cpu().numpy()
+        values = np.asarray(values)
+        if values.ndim != 1 or values.dtype.kind not in "iu":
+            raise ValueError(f"{name} must be a one-dimensional integer array")
+        return values
+
+    ids = integer_vector(row_id, "row_id")
+    labels = integer_vector(preds, "pred")
+    if len(ids) == 0 or len(ids) != len(labels):
+        raise ValueError("row_id and pred must be non-empty and have equal lengths")
+    if np.unique(ids).size != len(ids):
+        raise ValueError("Each row_id must occur exactly once")
+    if np.any(ids < 0) or np.any((labels < 0) | (labels > 6)):
+        raise ValueError("row_id must be non-negative; pred must be in 0..6")
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["row_id", "pred"])
+        writer.writerows(zip(ids.tolist(), labels.tolist()))
 
 
 def final_eval(cfg: dict, result: dict, data: dict, pred_path: str) -> None:
@@ -357,4 +402,28 @@ def final_eval(cfg: dict, result: dict, data: dict, pred_path: str) -> None:
       3. write_predictions(data["eval_row_id"], preds.cpu().numpy(), pred_path)
       4. chạy `python scripts/evaluate.py --pred <pred_path>` và ghi kết quả vào bảng/báo cáo
     """
-    raise NotImplementedError  # TODO
+    merged_cfg = {**DEFAULT_CFG, **cfg}
+    trained_cfg = {**DEFAULT_CFG, **result["cfg"]}
+    for key in DEFAULT_CFG:
+        if key in ("description", "group"):
+            continue
+        left, right = merged_cfg[key], trained_cfg[key]
+        if key in ("hidden", "betas"):
+            left, right = tuple(left), tuple(right)
+        if left != right:
+            raise ValueError(f"cfg and trained result disagree on {key}")
+    summary, history = result["summary"], result["history"]
+    if summary["diverged"] or summary["best_epoch"] < 1:
+        raise ValueError("Cannot submit a failed training run")
+    index = int(np.argmin(history["val_loss"]))
+    if (history["epoch"][index] != summary["best_epoch"] or
+            history["val_loss"][index] != summary["best_val_loss"]):
+        raise ValueError("best_epoch must correspond to minimum validation loss")
+    X_eval, ids = data["X_eval"], data["eval_row_id"]
+    if len(X_eval) != 116_203 or len(ids) != len(X_eval):
+        raise ValueError("Expected all 116203 eval samples with matching row_id")
+    model = MLP(hidden=tuple(merged_cfg["hidden"]), dropout=merged_cfg["dropout"],
+                init=merged_cfg["init"]).to(device=X_eval.device, dtype=torch.float32)
+    model.load_state_dict(result["best_state"], strict=True)
+    preds = predict(model, X_eval)
+    write_predictions(ids, preds, pred_path)
