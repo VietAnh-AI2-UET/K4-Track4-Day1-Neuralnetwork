@@ -8,3 +8,4 @@ data/processed/
 *.pth
 *.ckpt
 .venv
+.mplconfig/
